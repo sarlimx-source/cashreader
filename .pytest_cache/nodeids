@@ -1,0 +1,10 @@
+[
+  "tests/test_app.py::test_scan_post_decodes_image_and_returns_reader_result",
+  "tests/test_app.py::test_scan_post_rejects_missing_image",
+  "tests/test_app.py::test_scan_post_reports_missing_ocr_engine",
+  "tests/test_database.py::test_save_and_find_bill",
+  "tests/test_detector.py::test_detect_bill_uses_full_frame_for_bill_shaped_crop",
+  "tests/test_detector.py::test_normalize_serial_corrects_trailing_g_read_as_six",
+  "tests/test_federal_reserve.py::test_conflict",
+  "tests/test_federal_reserve.py::test_valid"
+]

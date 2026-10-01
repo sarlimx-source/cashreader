@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Cash Reader</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#111;color:#fff;margin:0}
+main{max-width:760px;margin:auto;padding:18px}
+h1{margin:0 0 6px}.subtitle{color:#aaa;margin-top:0}
+.camera{position:relative;background:#000;border-radius:16px;overflow:hidden;border:1px solid #333}
+video{width:100%;display:block;aspect-ratio:16/10;object-fit:cover;background:#000}
+.guide{position:absolute;left:5%;right:5%;top:16%;bottom:16%;border:3px solid #fff;border-radius:12px;box-shadow:0 0 0 9999px rgba(0,0,0,.18);pointer-events:none}
+.guide:after{content:"Place entire bill inside box";position:absolute;top:-34px;left:50%;transform:translateX(-50%);white-space:nowrap;background:#111;padding:5px 9px;border-radius:7px;font-size:13px}
+button{width:100%;padding:16px;margin-top:12px;border:0;border-radius:12px;font-size:18px;font-weight:bold;cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}
+#scan{background:#fff;color:#111}.secondary{background:#292929;color:#fff}
+#uploadInput{display:none}
+select{width:100%;padding:13px;margin-top:12px;border:1px solid #444;border-radius:10px;background:#222;color:#fff;font-size:16px}
+.card{margin-top:14px;padding:16px;border-radius:14px;background:#222}
+.row{display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid #333}.row:last-child{border-bottom:0}
+.label{color:#aaa}.value{text-align:right;word-break:break-word}
+.error{color:#ff8a8a}.ok{color:#8ff0a4}.warning{color:#ffd166}
+#debug{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#aaa;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<main>
+<h1>Cash Reader</h1>
+<p class="subtitle">Place one U.S. bill completely inside the guide.</p>
+
+<div class="camera">
+  <video id="video" autoplay playsinline muted></video>
+  <div class="guide"></div>
+</div>
+
+<button id="scan" disabled>📷 Start camera first</button>
+<button id="upload" class="secondary">🖼️ Choose Bill Photo</button>
+<input id="uploadInput" type="file" accept="image/*">
+<label for="side">Bill side</label>
+<select id="side"><option value="front" selected>Front — serial, series and Federal Reserve</option><option value="back">Back — design/denomination check</option></select>
+<button id="flip" class="secondary">🔄 Switch Camera</button>
+
+<div id="result" class="card">Starting camera…</div>
+<div id="debug" class="card">Browser diagnostics starting…</div>
+</main>
+
+<script>
+(function(){
+  "use strict";
+
+  let stream = null;
+  let facing = "environment";
+  let cameraReady = false;
+
+  const video = document.getElementById("video");
+  const result = document.getElementById("result");
+  const debug = document.getElementById("debug");
+  const scanButton = document.getElementById("scan");
+  const uploadButton = document.getElementById("upload");
+  const uploadInput = document.getElementById("uploadInput");
+  const sideSelect = document.getElementById("side");
+  const flipButton = document.getElementById("flip");
+
+  function log(message){
+    const time = new Date().toLocaleTimeString();
+    debug.textContent = "[" + time + "] " + message;
+    console.log("Cash Reader:", message);
+  }
+
+  function setResult(message, cls){
+    result.innerHTML = cls ? '<span class="' + cls + '">' + message + '</span>' : message;
+  }
+
+  async function startCamera(){
+    cameraReady = false;
+    scanButton.disabled = true;
+    scanButton.textContent = "Starting camera…";
+
+    if (stream) {
+      stream.getTracks().forEach(function(track){ track.stop(); });
+      stream = null;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setResult("Camera access is unavailable. Open the HTTPS page or choose a bill photo below.", "error");
+      log("navigator.mediaDevices.getUserMedia is unavailable.");
+      return;
+    }
+
+    try {
+      log("Requesting " + facing + " camera…");
+
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: {ideal: facing},
+          width: {ideal: 1920},
+          height: {ideal: 1080}
+        },
+        audio: false
+      });
+
+      video.srcObject = stream;
+      await video.play();
+
+      // Wait until the browser has actual video dimensions.
+      await new Promise(function(resolve){
+        if (video.videoWidth > 0 && video.videoHeight > 0) return resolve();
+        video.addEventListener("loadedmetadata", resolve, {once:true});
+      });
+
+      cameraReady = video.videoWidth > 0 && video.videoHeight > 0;
+      scanButton.disabled = !cameraReady;
+      scanButton.textContent = cameraReady ? "📷 Scan Bill" : "Camera not ready";
+
+      if (cameraReady) {
+        setResult("Camera ready. Put the whole bill inside the box, then press Scan Bill.", "ok");
+        log("Camera ready: " + video.videoWidth + "x" + video.videoHeight);
+      }
+    } catch (e) {
+      cameraReady = false;
+      scanButton.disabled = true;
+      scanButton.textContent = "📷 Start camera first";
+      setResult("Camera error: " + (e && e.message ? e.message : e), "error");
+      log("Camera error: " + (e && e.message ? e.message : e));
+    }
+  }
+
+  function escapeHtml(value){
+    return String(value == null ? "" : value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function showResult(r){
+    if (!r || typeof r !== "object") {
+      setResult("Server returned an invalid result.", "error");
+      return;
+    }
+
+    if (r.status === "error") {
+      setResult(escapeHtml(r.error || "Unknown server error"), "error");
+      return;
+    }
+
+    const f = r.federal_reserve || {
+      letter: r.federal_reserve_letter,
+      number: r.federal_reserve_number,
+      city: r.federal_reserve_city,
+      district: r.federal_reserve_district,
+      match: r.federal_reserve_match
+    };
+    const warnings = Array.isArray(r.warnings) ? r.warnings : [];
+    const denomination = r.denomination == null ? "Not read" : "$" + r.denomination;
+
+    result.innerHTML =
+      '<b style="font-size:20px">' +
+      (r.status === "ok" ? '<span class="ok">✓ Bill read</span>' : '<span class="warning">⚠ Needs review</span>') +
+      '</b>' +
+      '<div class="row"><span class="label">Denomination</span><span class="value">' + escapeHtml(denomination) + '</span></div>' +
+      '<div class="row"><span class="label">Serial</span><span class="value">' + escapeHtml(r.serial_number || "Not read") + '</span></div>' +
+      '<div class="row"><span class="label">Series</span><span class="value">' + escapeHtml(r.series || "Not read") + '</span></div>' +
+      '<div class="row"><span class="label">Federal Reserve</span><span class="value">' + escapeHtml((f.letter || "?") + " / " + (f.number || "?")) + '</span></div>' +
+      '<div class="row"><span class="label">District</span><span class="value">' + escapeHtml(f.city || f.district || "?") + '</span></div>' +
+      '<div class="row"><span class="label">Serial match</span><span class="value">' + (r.serial_match === true ? "YES" : "NO / UNKNOWN") + '</span></div>' +
+      '<div class="row"><span class="label">Fed match</span><span class="value">' + (f.match === true ? "YES" : "NO / UNKNOWN") + '</span></div>' +
+      '<div class="row"><span class="label">Confidence</span><span class="value">' + escapeHtml(r.confidence == null ? "?" : r.confidence) + '</span></div>' +
+      (warnings.length ? '<div style="margin-top:12px" class="warning"><b>Warnings:</b><br>' + warnings.map(escapeHtml).join("<br>") + '</div>' : '');
+  }
+
+  async function scanBill(uploadedImage){
+    if (!uploadedImage && (!cameraReady || !video.videoWidth || !video.videoHeight)) {
+      setResult("Camera is not ready yet.", "error");
+      log("Scan blocked because cameraReady=false or video dimensions are zero.");
+      return;
+    }
+
+    scanButton.disabled = true;
+    uploadButton.disabled = true;
+    scanButton.textContent = "Scanning…";
+    setResult("Sending image to Cash Reader…");
+
+    try {
+      let image = uploadedImage;
+      if (!image) {
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext("2d", {willReadFrequently:false});
+        if (!ctx) throw new Error("Could not create canvas context.");
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        image = canvas.toDataURL("image/jpeg", 0.92);
+      }
+      log("Sending /api/scan; image size=" + Math.round(image.length / 1024) + " KB");
+
+      const response = await fetch("/api/scan", {
+        method: "POST",
+        headers: {"Content-Type":"application/json","Accept":"application/json"},
+        body: JSON.stringify({image:image, side:sideSelect.value})
+      });
+
+      const text = await response.text();
+      log("/api/scan response: HTTP " + response.status + ", " + text.length + " bytes");
+
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (parseError) {
+        throw new Error("Server did not return JSON. HTTP " + response.status + ". Response: " + text.slice(0,300));
+      }
+
+      if (!response.ok) {
+        throw new Error(data.error || "Scan request failed with HTTP " + response.status);
+      }
+
+      showResult(data);
+    } catch (e) {
+      setResult(escapeHtml(e && e.message ? e.message : e), "error");
+      log("Scan error: " + (e && e.message ? e.message : e));
+    } finally {
+      scanButton.disabled = !cameraReady;
+      uploadButton.disabled = false;
+      scanButton.textContent = cameraReady ? "📷 Scan Bill" : "📷 Start camera first";
+    }
+  }
+
+  scanButton.addEventListener("click", function(){ scanBill(); });
+  uploadButton.addEventListener("click", function(){ uploadInput.click(); });
+  uploadInput.addEventListener("change", function(){
+    const file = uploadInput.files && uploadInput.files[0];
+    if (!file) return;
+    uploadInput.value = "";
+    if (!file.type.startsWith("image/")) {
+      setResult("Please choose an image file.", "error");
+      return;
+    }
+    const fileReader = new FileReader();
+    fileReader.onload = function(){ scanBill(String(fileReader.result)); };
+    fileReader.onerror = function(){ setResult("Could not read the selected image.", "error"); };
+    fileReader.readAsDataURL(file);
+  });
+  flipButton.addEventListener("click", async function(){
+    facing = facing === "environment" ? "user" : "environment";
+    await startCamera();
+  });
+
+  // Verify that the page is talking to the Flask server.
+  fetch("/api/health", {cache:"no-store"})
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      log(data.ocr_available
+        ? "Server health: ok; Tesseract OCR " + data.ocr_version + ". Starting camera…"
+        : "Server is running, but Tesseract OCR is missing. Install it to read bills.");
+      if (!data.ocr_available) setResult("Server is reachable, but Tesseract OCR is not installed. Install Tesseract OCR and restart the server.", "error");
+    })
+    .catch(function(e){ log("Health check failed: " + e.message); });
+
+  startCamera();
+})();
+</script>
+</body>
+</html>
