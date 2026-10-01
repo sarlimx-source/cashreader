@@ -1,0 +1,8 @@
+opencv-python
+numpy
+Pillow
+pytesseract
+pytest
+
+# SQLite is included with Python; no database package is required.
+Flask>=3.0,<4
